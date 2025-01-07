@@ -1,1 +1,1 @@
-# kuwang pa ni shag interface pero goods na ang function
+# A company scheme simulation program focused amassing fortunes with pyramid scheme.
