@@ -23,9 +23,14 @@
 #define BOLD_ON "\033[1m"
 #define YELLOW "\e[0;33m"
 
+#define SAGENT_THRESHOLD 3
+#define LAGENT_THRESHOLD 5
+#define SUP_THRESHOLD 7
+
+int guideIndicator = 1;
 int CEO_Comm = 0;
 int Employee_Count = 0;
-int textSpeed = 25;
+int textSpeed = 0;
 char CompanyName[200];
 int lastUsedID = 0; // Variable to track the last used ID
 
@@ -37,9 +42,15 @@ typedef struct Node {
     char position[50];
     int downLine;
     float commission;
+    int parentID;
     struct Node* left;
     struct Node* right;
 } Node;
+
+typedef struct {
+    int threshold;
+    char position[50];
+} ThresholdPosition;
 
 typedef struct QueueNode {
     Node* treeNode;
@@ -53,11 +64,10 @@ typedef struct Queue {
 
 
 
-
 // Forward declarations
 void writeFileHelper(FILE* file, Node* root, int depth);
-Node* createNode(char name[], int age, int ID, char position[], int downLine, float commission);
-Node* addToTree(Node* root, Node* newNode);
+Node* createNode(char name[], int age, int ID, char position[], int downLine, float commission,int parentID);
+Node* addToTree(Node* root, Node* newNode, int  ID);
 void displayTree(Node* root);
 Node* removeNode(Node* root, int ID);
 void updateDownlineAndCommission(Node* root);
@@ -67,7 +77,7 @@ int ID_Generator();
 void setAsset();
 void getAsset();
 void typeText(const char* text, int delay_ms);
-void Hiring_Process(int age, char name[], Node* root);
+void Hiring_Process(int age, char name[], Node* root, int ParentID);
 bool isFileEmpty(const char* filename);
 Node* loadFromFileToTree(Node* root);
 void wipeData_fromFile(Node* root);
@@ -77,6 +87,12 @@ int isQueueEmpty(Queue* queue);
 void displayTreeHelper(Node* root, int depth);
 void bannerDisplay();
 void writeFile(FILE* file, Node* root);
+void endSentences();
+void Hiring_Validation(int age, char name[], Node* root, int ParentID);
+void updatePositions(Node* root, ThresholdPosition* thresholds, int numThresholds);
+void traverseAndUpdate(Node* node, ThresholdPosition* thresholds, int numThresholds);
+void checkAndUpdatePosition(Node* node, ThresholdPosition* thresholds, int numThresholds);
+
 
 
 
@@ -116,7 +132,7 @@ void writeFileHelper(FILE* file, Node* root, int depth) {
         fprintf(file, "   ");
     }
 
-    fprintf(file, "Name: %s\tAge:%d\tID: %d\tPosition: %s\tDownline: %d\tCommission: %f\n", root->name, root->age, root->ID, root->position, root->downLine, root->commission);
+    fprintf(file, "Name: %s\tAge:%d\tID: %d\tPosition: %s\tDownline: %d\tCommission: $%.2f\tParent ID: %d\n", root->name, root->age, root->ID, root->position, root->downLine, root->commission,root->parentID);
 
     writeFileHelper(file, root->left, depth + 1);
     writeFileHelper(file, root->right, depth + 1);
@@ -130,14 +146,20 @@ Node* loadFromFileToTree(Node* root) {
         return NULL;
     }
 
-    int age, ID, downLine;
+    int age, ID, downLine, parentID;
     char name[50], position[50];
     float commission;
 
-    while (fscanf(file, "Name: %49[^\t]\tAge:%d\tID: %d\tPosition: %49[^\t]\tDownline: %d\tCommission: %f\n",
-                  name, &age, &ID, position, &downLine, &commission) == 6) {
-        Node* newNode = createNode(name, age, ID, position, downLine, commission);
-        root = addToTree(root, newNode);
+    while (fscanf(file, "Name: %49[^\t]\tAge:%d\tID: %d\tPosition: %49[^\t]\tDownline: %d\tCommission: %f\tParentID: %d\n",
+               name, &age, &ID, position, &downLine, &commission, &parentID) == 7) { 
+        Node* newNode = createNode(name, age, ID, position, downLine, commission, parentID);
+        if (parentID == 0) {
+            // If ParentID is 0, this is the root node
+            root = newNode;
+        } else {
+            // Add the node to the tree based on ParentID
+            root = addToTree(root, newNode, parentID);
+        }
         if (ID > lastUsedID) {
             lastUsedID = ID; // Update lastUsedID to the maximum ID found
         }
@@ -240,43 +262,45 @@ int isQueueEmpty(Queue* queue) {
 // TREE OPERATIONS
 
 // Add to tree
-Node* addToTree(Node* root, Node* newNode) {
+Node* addToTree(Node* root, Node* newNode, int parentID) {
     if (root == NULL) {
         return newNode;
     }
 
-    Queue queue = {NULL, NULL}; //declaration of queue {left, right}
-    enqueue(&queue, root); //(queue, treeNode)
+    Queue queue = {NULL, NULL};
+    enqueue(&queue, root);
 
     while (!isQueueEmpty(&queue)) {
         Node* current = dequeue(&queue);
 
-        // Check if the current node can have a left child
-        if (current->left == NULL) {
-            current->left = newNode;
-            break;
-        } else {
-            enqueue(&queue, current->left);
+        if (current->ID == parentID) {
+            if (current->left == NULL) {
+                current->left = newNode;
+                return root;
+            } else if (current->right == NULL) {
+                current->right = newNode;
+                return root;
+            } else {
+                printf("Node with ID %d already has two children.\n", parentID);
+                return root;
+            }
         }
 
-        // Check if the current node can have a right child
-        if (current->right == NULL) {
-            current->right = newNode;
-            break;
-        } else {
+        if (current->left != NULL) {
+            enqueue(&queue, current->left);
+        }
+        if (current->right != NULL) {
             enqueue(&queue, current->right);
         }
     }
 
-    // Update downline and commission for the entire tree
-    updateDownlineAndCommission(root);
-
+    printf("Parent node with ID %d not found.\n", parentID);
     return root;
 }
 
 
 // Create node
-Node* createNode(char name[], int age, int ID, char position[], int downLine, float commission) {
+Node* createNode(char name[], int age, int ID, char position[], int downLine, float commission, int parentID) {
     Node* newNode = (Node*)malloc(sizeof(Node));
     strcpy(newNode->name, name);
     newNode->age = age;
@@ -286,6 +310,7 @@ Node* createNode(char name[], int age, int ID, char position[], int downLine, fl
     newNode->commission = commission; 
     newNode->left = NULL;
     newNode->right = NULL;
+    newNode->parentID = parentID;
 
     CEO_Comm += 500;
     Employee_Count++;
@@ -348,6 +373,7 @@ Node* removeNode(Node* root, int ID) {
         strcpy(targetNode->position, deepestNode->position);
         targetNode->downLine = deepestNode->downLine;
         targetNode->commission = deepestNode->commission;
+        targetNode->parentID = deepestNode->parentID;
 
         // Remove the deepest node
         if (parentOfDeepestNode->left == deepestNode) {
@@ -381,7 +407,7 @@ void displayTreeHelper(Node* root, int depth) {
         printf("   "); // Add indentation
     }
 
-    printf("Name: %s\t("CYN"%d, "OFF""MAG"%d, "OFF""RED"%s"OFF", %d, "GREEN"$%.2f"OFF")\n",
+    printf("Name: %s\t("CYN"%d, "OFF""MAG"%d, "OFF""RED"%s"OFF", %d, "GREEN"$%.2f,"OFF YELLOW" %d"OFF")\n",
            root->name, root->age, root->ID, root->position, root->downLine, root->commission);
 
     displayTreeHelper(root->left, depth + 1);
@@ -482,38 +508,55 @@ int ID_Generator() {
     return ++lastUsedID; // Increment and return the next ID
 }
 
-// Hiring process
-void Hiring_Process(int age, char name[], Node* root){
-    while(1){
-        char position[50] = "Agent";
-        int ID;
+void showVacantNodes(Node* node) {
+    if (node == NULL) {
+        return;
+    }
+    
+    // Check if the current node has any vacant child
+    if (node->left == NULL || node->right == NULL) {
+        printf("%s ID: %d has unreferred referral/s.\n", node->name,node->ID);
+    } else {
+        printf("%s ID: %d has no referrals left.\n",node->name, node->ID);
+    }
 
-        typeText(YELLOW"\n\n\n[1]"OFF" "GREEN"Hired!\n"OFF YELLOW"[2]"OFF RED" I think I'll pass.\n\n"OFF,textSpeed);
+    // Recursively check left and right subtrees
+    showVacantNodes(node->left);
+    showVacantNodes(node->right);
+}
+
+// Hiring process
+void Hiring_Process(int age, char name[], Node* root, int ParentID) {
+    char position[50] = "Agent";
+    int ID;
+
+    while (1) {
+        typeText(YELLOW"\n\n\n[1]"OFF" "GREEN"Hired!\n"OFF YELLOW"[2]"OFF RED" I think I'll pass.\n\n"OFF, textSpeed);
         int choice; 
         printf(YELLOW"Decision: "OFF);
         scanf("%d", &choice); 
         getchar();
         clearScreen();
 
-        if(choice == 1){
-            typeText(YELLOW"Welcome to the Team "OFF,textSpeed);
+        if (choice == 1) {
+            typeText(YELLOW"Welcome to the Team "OFF, textSpeed);
             printf(BLUE"%s"OFF, name);
-            typeText(YELLOW ITALIC_ON"\nDo your best to earn us money ;)\n"OFF,textSpeed);
+            typeText(YELLOW ITALIC_ON"\nDo your best to earn us money ;)\n"OFF, textSpeed);
             ID = ID_Generator(); // Generate new ID
-            Node* newNode = createNode(name, age, ID, position, 0, 0);
-            root = addToTree(root, newNode);
+            Node* newNode = createNode(name, age, ID, position, 0, 0, ParentID);
+            root = addToTree(root, newNode, ParentID); // Use 0 as a placeholder, will be updated correctly in HireFromReferal
             getchar();
             clearScreen();
             return;
 
-        } else if(choice == 2){
+        } else if (choice == 2) {
             typeText(YELLOW ITALIC_ON"Awww thats a shame, better luck next time "OFF, textSpeed);
             printf(BLUE"%s"OFF, name);
             getchar();
             clearScreen();
             return;
         } else {
-            typeText(HRED ITALIC_ON"There are only 2 choices. How can you mess that up?!"OFF,textSpeed);
+            typeText(HRED ITALIC_ON"There are only 2 choices. How can you mess that up?!"OFF, textSpeed);
             getchar();
             clearScreen();
         }
@@ -533,43 +576,144 @@ void updateDownlineAndCommission(Node* root) {
     }
 }
 
+// Function to update the positions based on the downline threshold
+void updatePositions(Node* root, ThresholdPosition* thresholds, int numThresholds) {
+    if (root != NULL) {
+        if (root->left != NULL) traverseAndUpdate(root->left, thresholds, numThresholds);
+        if (root->right != NULL) traverseAndUpdate(root->right, thresholds, numThresholds);
+    }
+}
+
+// Helper function to traverse the tree and update positions
+void traverseAndUpdate(Node* node, ThresholdPosition* thresholds, int numThresholds) {
+    if (node == NULL) {
+        return;
+    }
+
+    checkAndUpdatePosition(node, thresholds, numThresholds);
+
+    traverseAndUpdate(node->left, thresholds, numThresholds);
+    traverseAndUpdate(node->right, thresholds, numThresholds);
+}
+
+void checkAndUpdatePosition(Node* node, ThresholdPosition* thresholds, int numThresholds) {
+    for (int i = 0; i < numThresholds; i++) {
+        if (node->downLine >= thresholds[i].threshold) {
+            strcpy(node->position, thresholds[i].position);
+        }
+    }
+}
 
 
 
+void endSentences(){
+    getchar();
+    clearScreen();
+}
+
+void guide(int option){
+    switch(option){
+        case 1:
+            typeText(YELLOW"Check Employees\n"OFF"This section showcases the overall hierarchy of the company as well as details on each employee.\n\n\n"YELLOW"[ENTER] to continue.."OFF,textSpeed);
+            endSentences();
+            break;
+        case 2:
+            typeText(YELLOW"Hire Employee\n" OFF"This is where the hiring process is located.\nThe hiring process includes 2 parts:\n1. The checking of vacant positions.\n2. Employee details input\n\t-Employee input must follow a format: \n\t\tName = \"Full name excluding middle name\"\n\t\tAge = \"age\"\nInput [-1] on employee ID to return.\n\n\n"YELLOW"[ENTER] to continue.."OFF,textSpeed);
+            endSentences();
+            break;
+        case 3:
+            typeText(YELLOW"Fire Employee\n"OFF"This section is where the firing process happens.\nIt asks for an employee's ID number and searches for it in the binary tree then removes it.\n\n\n"YELLOW"[ENTER] to continue.."OFF,textSpeed);
+            endSentences();
+            break;
+        case 4:
+            typeText(YELLOW"Save File\n"OFF "Manually saves the file to the current directory.\n\n\n"YELLOW"[ENTER] to continue.."OFF,textSpeed);
+            endSentences();
+            break;
+        case 5:
+            typeText(YELLOW"Pocket Money\n"OFF"This is where the separate commission and total employee hired displays.\nThis commission is earned through "YELLOW"Hiring."OFF"\neverytime you hire an employee, you gain a $500 commission.\n\n\n"YELLOW"[ENTER] to continue.."OFF,textSpeed);
+            endSentences();
+            break;
+        case 6:
+            typeText(YELLOW"Demolish Company\n"OFF"This is where the company is completely deleted.\nThis is irreversible.\n\n\n"YELLOW"[ENTER] to continue.."OFF,textSpeed);
+            endSentences();
+            break;
+        case 7:
+            typeText(YELLOW"Settings\n"OFF"This section contains the customizable aspects of the program.\n\n\n"YELLOW"[ENTER] to continue.."OFF,textSpeed);
+            endSentences();
+            break;
+        case 8:
+            typeText(YELLOW"Clock Out\n"OFF"This section is where the user can clock out and end their session.\n\n\n"YELLOW"[ENTER] to continue.."OFF,textSpeed);
+            endSentences();
+            break;
+    }
+}
 
 
+void Hiring_Validation(int age, char name[], Node* root, int ParentID){
+    printf("Hire Employee\n\n");
+                typeText(YELLOW ITALIC_ON"Hmmmm "OFF,10);
+                printf(BLUE"%d"OFF,age);
+                typeText(YELLOW ITALIC_ON" huh. "OFF,10);
+                if (age < 25 && age > 17){
+                    typeText(YELLOW ITALIC_ON"This person seems to be young, you know.",textSpeed);
+                    typeText("\nMight lack experience. But we might hit a gold mine with this one. \nThis kid may be full of potential!"OFF,textSpeed);
+                    
+                    Hiring_Process(age, name, root, ParentID);
+                } else if (age > 45 && age < 60){
+                    typeText(YELLOW ITALIC_ON"Well, this person sure isn't going to be happy with being an "OFF HRED"agent"OFF YELLOW ITALIC_ON"\nRickety knees might be the cause of their death.\nBut you know as they say, \"With age, comes wisdom and experience\""OFF,textSpeed);
+                    Hiring_Process(age, name, root, ParentID);
+                } else if (age >= 60){
+                    typeText(YELLOW ITALIC_ON"I trust that you have the common sense to know that we are not running a nursing home. Let's just send this old person to their home so we can move on with our lives\n\n\n"OFF,textSpeed);
+                    typeText(YELLOW"[ENTER] "OFF HGRN"I know, I know..."OFF,textSpeed);
+                    endSentences();
+                    return;
+                } else if (age <= 17){
+                    typeText(YELLOW ITALIC_ON"Send this child home right this instant. We can't have children working here. We don't want to be invloved in some unsightly scandal"OFF,textSpeed);
+                    typeText(YELLOW"[ENTER]"OFF HGRN" Yeah, it would be best to stay away from this one..."OFF,textSpeed);
+                    endSentences();
+                    return;
+                } else {
+                    typeText(YELLOW ITALIC_ON"This seems to be an appropriate age to hire. So, why not right?"OFF,textSpeed);
+                    
+                    Hiring_Process(age, name, root, ParentID);
+                }
+}
 
-int main() {
-    Node* root = NULL;
-    root = loadFromFileToTree(root);
-    getAsset();
 
-    if (isFileEmpty("EmployeeData.txt")) {
-        printf("Enter Name: ");
-        char name[50]; scanf("%[^\n]", name); while (getchar() != '\n'); 
-        printf("Enter Age: ");
-        int age; scanf("%d", &age); while (getchar() != '\n'); 
-        printf("Enter Company name: ");
-        scanf("%[^\n]", CompanyName); while (getchar() != '\n'); 
+void HireFromReferal(Node* root, int ParentID, char name[], int age) {
+    if (root == NULL) {
+        return;
+    }
 
-        char position[50] = "Chief Executive Officer";
-        int downLine = 0;
-        int ID = ID_Generator();
-        Node* newNode = createNode(name, age, ID, position, downLine, 0);
-        root = addToTree(root, newNode);
+    if (root->ID == ParentID) {
+        printf("Hiring from referral of %s: %s ID number: %d\n", root->position, root->name, root->ID);
+        if (root->left == NULL || root->right == NULL) {
+            Hiring_Validation(age, name, root, ParentID);
+            return;
+        } else {
+            typeText("This person already used up their referrals..\n\n\n[ENTER] to return...", textSpeed);
+            endSentences();
+            return;
+        }
+    }
 
+    HireFromReferal(root->left, ParentID, name, age);
+    HireFromReferal(root->right, ParentID, name, age);
+}
+
+void IntroProcess(){
+    clearScreen();
+        typeText(RED"Finalizing Contracts",textSpeed);Sleep(500);printf(".");Sleep(500);printf(".");Sleep(500);printf("."OFF);Sleep(500);
         clearScreen();
-        typeText(RED"Finalizing Contracts",textSpeed);Sleep(1000);printf(".");Sleep(1000);printf(".");Sleep(1000);printf("."OFF);Sleep(1000);
+        typeText(HGRN"Contracts Finalized!"OFF,textSpeed);Sleep(500);
         clearScreen();
-        typeText(HGRN"Contracts Finalized!"OFF,textSpeed);Sleep(1000);
+        typeText(RED"Building Company",textSpeed);Sleep(500);printf(".");Sleep(500);printf(".");Sleep(500);printf("."OFF);Sleep(500);
         clearScreen();
-        typeText(RED"Building Company",textSpeed);Sleep(1000);printf(".");Sleep(1000);printf(".");Sleep(1000);printf("."OFF);Sleep(1000);
+        typeText(HGRN"Company Built!"OFF,textSpeed);Sleep(500);
         clearScreen();
-        typeText(HGRN"Company Built!"OFF,textSpeed);Sleep(1000);
+        typeText(RED"Booting Assistant",textSpeed);Sleep(500);printf(".");Sleep(500);printf(".");Sleep(500);printf("."OFF);Sleep(500);
         clearScreen();
-        typeText(RED"Booting Assistant",textSpeed);Sleep(1000);printf(".");Sleep(1000);printf(".");Sleep(1000);printf("."OFF);Sleep(1000);
-        clearScreen();
-        typeText(HGRN"Assistant Booted!"OFF,textSpeed);Sleep(1000);
+        typeText(HGRN"Assistant Booted!"OFF,textSpeed);Sleep(500);
         clearScreen();
 
         typeText(YELLOW"Company Successfully created!\n\n\n\n[ENTER] to continue..."OFF,textSpeed);
@@ -578,19 +722,182 @@ int main() {
         clearScreen();
 
         typeText(YELLOW ITALIC_ON"\t\tWELCOME TO YOUR COMPANY SCHEME SIMULATION\n", textSpeed);
-        typeText("\t\t     You are the CEO of the company.\n   For every employee that you hire, you gain 500 dollars as pocket money! ;)\n\n"OFF, textSpeed);
+        typeText("\t\t     You are the CEO of the company.\n   For every employee that you hire, you gain 500 dollars as pocket money! ;)\n\n[ENTER] to continue..."OFF, textSpeed);
         getchar(); clearScreen();
 
+}
+
+bool nameCheck( Node* root, char name[]){
+    Node* current = root;
+    if(current == NULL){
+        return false;
+    }
+
+    if(strcasecmp(current->name, name) == 0){
+        return true;
+    }
+
+    return nameCheck(root->left, name) || nameCheck(root->right, name);
+}
+
+void setting(){
+    while(1){
+                    printf("Settings\n\n");
+                    typeText(YELLOW ITALIC_ON"What do you want to customize\n\n"OFF,textSpeed);
+                    
+                    typeText(YELLOW "[1] Text Animation.\n[2] Guides.\n[3] Return\n\n\nDecision: "OFF,textSpeed);
+                    int choice; scanf("%d", &choice); 
+                    endSentences();
+
+                    if(choice == 1){
+                        printf("Settings -> Text Animation\n\n");
+                        if(textSpeed != 0){
+                            typeText(YELLOW ITALIC_ON"Do you want to remove text Animation?\n\n\n[1]"OFF RED" Yeah, it's getting kind of annoying\n"OFF YELLOW"[2]"OFF HGRN" No, I changed my mind"OFF YELLOW"\n\n Decision: "OFF,textSpeed);
+                            int choice2; scanf("%d", &choice2);
+                            clearScreen();
+                            if (choice2 == 1) {
+                            clearScreen();
+                            typeText(YELLOW ITALIC_ON"It took quite a lot of effort to make it look good you know. \nBut oh well, \"The user is always right\" I guess.\n\n\n"OFF YELLOW"[ENTER]"OFF HGRN" ..."OFF,textSpeed);
+                            getchar();
+                            textSpeed = 0;
+                            clearScreen();
+                            break;
+                            }
+                            else if (choice2 == 2) {
+                            typeText(YELLOW ITALIC_ON"You've got good taste boss! You truly have an eye for aesthetics!\n\n\n"OFF YELLOW"[ENTER]"OFF HGRN" ..."OFF,textSpeed);
+                            getchar();
+                            clearScreen();
+                            break;
+                            } else {
+                            clearScreen();
+                            typeText(YELLOW ITALIC_ON"There literally only 2 choices."OFF HRED" TWO CHOICES!"OFF YELLOW ITALIC_ON" How can you mess that up!\n\n\n"OFF YELLOW"[ENTER]"OFF HGRN" ..."OFF,textSpeed);
+                            getchar();
+                            clearScreen;
+                            }
+                        }else{
+                            typeText(YELLOW ITALIC_ON"Oh, you want the animations back? Changed your mind? Kind of an indecisive person aren't you.\n\n\n"OFF YELLOW"[1]"HGRN" Yeah, so what?!\n"OFF YELLOW"[2]"OFF RED" Well, maybe you're right!"OFF YELLOW"\n\n\nDecision: "OFF,textSpeed);
+                            int choice; scanf("%d", &choice); getchar();
+                            if (choice == 1) {
+                                clearScreen();
+                                typeText(YELLOW ITALIC_ON"Good for you, I guess...\n\n\n"OFF YELLOW"[ENTER]"HGRN" ..."OFF,textSpeed);
+                                textSpeed = 15;
+                                getchar();
+                                clearScreen();
+                                break;
+                            }
+                            else if (choice == 2){
+                                clearScreen();
+                                typeText(YELLOW ITALIC_ON"Okay then, I suppose...\n\n\n"OFF YELLOW"[ENTER]"HGRN" ..."OFF,textSpeed);
+                                getchar();
+                                clearScreen();
+                                break;
+                            } else {
+                                clearScreen();
+                                typeText(YELLOW ITALIC_ON"There literally only 2 choices."OFF HRED" TWO CHOICES!"OFF YELLOW ITALIC_ON" How can you mess that up!\n\n\n"OFF YELLOW"[ENTER]"OFF HGRN" ..."OFF,textSpeed);
+                                getchar();
+                                clearScreen;
+                            }
+                        }
+                        
+                    }
+                    if(choice == 2){
+                        printf("Settings -> Guides");
+                        if(guideIndicator != 0){
+                            typeText(YELLOW ITALIC_ON"\n\n\nDo you want to remove guides?"OFF"\n\n\n"YELLOW"[1]"OFF RED"Yeah, I know it all."OFF YELLOW"\n[2]"OFF HGRN" No, I changed my mind."OFF YELLOW"\n\n Decision: "OFF,textSpeed);
+                            int choice2; scanf("%d", &choice2);
+                            if (choice2 == 1) {
+                            clearScreen();
+                            typeText(YELLOW ITALIC_ON"You do you, I guess. Guides don't seem to be that harmful, in fact, its quite helpful.\n\n\n"OFF YELLOW"[ENTER]"OFF HGRN" ..."OFF,textSpeed);
+                            
+                            guideIndicator = 0;
+                            endSentences();
+                            break;
+                            }
+                            else if (choice2 == 2) {
+                            typeText(YELLOW ITALIC_ON"Now, that is some wise thinking. Guides are helpful. Make you not forget about instructions!\n\n\n"OFF YELLOW"[ENTER]"OFF HGRN" ..."OFF,textSpeed);
+                            endSentences();
+                            break;
+                            } else {
+                            clearScreen();
+                            typeText(YELLOW ITALIC_ON"There literally only 2 choices."OFF HRED" TWO CHOICES!"OFF YELLOW ITALIC_ON" How can you mess that up!\n\n\n"OFF YELLOW"[ENTER]"OFF HGRN" ..."OFF,textSpeed);
+                            endSentences();
+                            }
+                        }else{
+                            typeText(YELLOW ITALIC_ON"Oh you want the guides back? Changed your mind? Realized the usefulness of guides?\n\n\n"OFF YELLOW"[1]"HGRN" Yeah, you were right\n"OFF YELLOW"[2]"OFF RED" Nope, still turning it off"OFF YELLOW"\n\n\nDecision: "OFF,textSpeed);
+                            int choice; scanf("%d", &choice); getchar();
+                            clearScreen();
+                            if (choice == 1) {
+                                clearScreen();
+                                typeText(YELLOW ITALIC_ON"Guides are nice, aren't they.\n\n\n"OFF YELLOW"[ENTER]"HGRN" ..."OFF,textSpeed);
+                                guideIndicator = 1;
+                                endSentences();
+                                break;
+                            }
+                            else if (choice == 2){
+                                clearScreen();
+                                typeText(YELLOW ITALIC_ON"Okay then, I suppose...\n\n\n"OFF YELLOW"[ENTER]"HGRN" ..."OFF,textSpeed);
+                                endSentences();
+                                break;
+                            } else {
+                                clearScreen();
+                                typeText(YELLOW ITALIC_ON"There literally only 2 choices."OFF HRED" TWO CHOICES!"OFF YELLOW ITALIC_ON" How can you mess that up!\n\n\n"OFF YELLOW"[ENTER]"OFF HGRN" ..."OFF,textSpeed);
+                                endSentences();
+                            }
+                        }
+                        
+                    }
+                    if(choice == 3){
+                        return;
+                    }
+                    else{
+                        printf(YELLOW ITALIC_ON"Please choose something from the choices. Not from anywhere else\n\n\n[ENTER]"OFF HGRN" ..."OFF);
+                        endSentences();
+                    }
+                    
+                        
+                }
+
+}
+
+
+
+int main() {
+    Node* root = NULL;
+    root = loadFromFileToTree(root);
+    getAsset();
+
+    ThresholdPosition thresholds[] = {
+        {SAGENT_THRESHOLD, "Senior Agent"},
+        {LAGENT_THRESHOLD, "Lead Agent"},
+        {SUP_THRESHOLD, "Supervisor"},
+    };
+
+    if (isFileEmpty("EmployeeData.txt")) {
+        printf("Chief Executive Officer information input section:\n");
+        printf("Enter CEO Full Name: ");
+        char name[50]; scanf("%[^\n]", name); while (getchar() != '\n'); 
+        printf("Enter CEO Age: ");
+        int age; scanf("%d", &age); while (getchar() != '\n'); 
+        printf("Enter Company name: ");
+        scanf("%[^\n]", CompanyName); while (getchar() != '\n'); 
+
+        char position[50] = "Chief Executive Officer";
+        int downLine = 0;
+        int ID = ID_Generator();
+        Node* newNode = createNode(name, age, ID, position, downLine, 0, 0);
+        root = addToTree(root, newNode, ID);
+        IntroProcess();
+        
     } else if(isFileEmpty("EmployeeData.txt") != 0){
         textSpeed = 15;
     }
 
     while (1) {
         int choice;
-
+        
         bannerDisplay();
         typeText(YELLOW ITALIC_ON"What would you like to do today boss?\n\n"OFF,textSpeed);
-        typeText(YELLOW"[1]. Check Employees\n[2]. Hire Employee\n[3]. Fire Employee\n[4]. Save File\n[5]. Pocket Money ;)\n[6]. Demolish Company?\n[7]. Text Animation\n[8]. Clock Out\n\n\nEnter your choice: "OFF, textSpeed);
+        typeText(YELLOW"[1]. Check Employees\n[2]. Hire Employee\n[3]. Fire Employee\n[4]. Save File\n[5]. Pocket Money ;)\n[6]. Demolish Company?\n[7]. Settings\n[8]. Clock Out\n\n\nEnter your choice: "OFF, textSpeed);
 
         scanf("%d", &choice);
         getchar();
@@ -598,6 +905,10 @@ int main() {
 
         switch (choice) {
             case 1:
+                if(guideIndicator == 1){guide(1);}
+                updatePositions(root, thresholds, sizeof(thresholds) / sizeof(thresholds[0]));
+                clearScreen();
+                printf("Check Employees\n\n");
                 typeText(GOLD"Legend:"OFF"\n\nName: \t("BLUE"Age,"OFF""MAG" ID number,"OFF""RED" Position,"OFF" Downline, "GREEN"Commission"OFF")\n\n\n",textSpeed);
                 displayTree(root);
                 typeText(YELLOW"[ENTER] to return..."OFF,textSpeed);
@@ -606,51 +917,44 @@ int main() {
                 break;
 
             case 2: {
+                if(guideIndicator == 1){guide(2);}
                 char name[50];
                 int age;
 
-                typeText(YELLOW"The applicants you will hire will be assigned the position of "OFF""HRED"Agent\n"OFF, textSpeed);
-                printf("Enter Name: ");
-                scanf("%[^\n]", name);getchar();
-                printf("Enter Age: ");
+                printf("Hire Employee\n\n");
+                showVacantNodes(root);
+                
+                typeText("\n\n\nEnter Referal Employee ID: ",textSpeed);
+                int ParentID; scanf("%d", &ParentID); getchar();
+
+                if(ParentID == -1){
+                    break;
+                }
+                typeText(YELLOW"\nThe applicants you will hire is assigned the position of "OFF""HRED"Agent\n"OFF, textSpeed);
+                printf("Enter Applicant's Full Name: ");
+                fgets(name, sizeof(name), stdin);
+
+                
+                if(nameCheck(root, name) == true){
+                    printf("Employee already exists\n");
+                    endSentences();
+                    break;
+                }
+                
+                printf("Enter Applicant's Age: ");
                 scanf("%d", &age);getchar();
+                clearScreen();
+                HireFromReferal(root, ParentID, name, age);
 
                 clearScreen();
-                typeText(YELLOW ITALIC_ON"Hmmmm "OFF,10);
-                printf(BLUE"%d"OFF,age);
-                typeText(YELLOW ITALIC_ON" huh. "OFF,10);
-                if (age < 25 && age > 17){
-                    typeText(YELLOW ITALIC_ON"This person seems to be young, you know.",textSpeed);
-                    typeText("\nMight lack experience. But we might hit a gold mine with this one. \nThis kid may be full of potential!"OFF,textSpeed);
-                    
-                    Hiring_Process(age, name, root);
-                } else if (age > 45 && age < 60){
-                    typeText(YELLOW ITALIC_ON"Well, this person sure isn't going to be happy with being an "OFF HRED"agent"OFF YELLOW ITALIC_ON"\nRickety knees might be the cause of their death.\nBut you know as they say, \"With age, comes wisdom and experience\""OFF,textSpeed);
-                    Hiring_Process(age, name, root);
-                } else if (age >= 60){
-                    typeText(YELLOW ITALIC_ON"I trust that you have the common sense to know that we are not running a nursing home. Let's just send this old person to their home so we can move on with our lives\n\n\n"OFF,textSpeed);
-                    typeText(YELLOW"[ENTER] "OFF HGRN"I know, I know..."OFF,textSpeed);
-                    getchar();
-                    clearScreen();
-                    break;
-                } else if (age <= 17){
-                    typeText(YELLOW ITALIC_ON"Send this child home right this instant. We can't have children working here. We don't want to be invloved in some unsightly scandal"OFF,textSpeed);
-                    typeText(YELLOW"[ENTER]"OFF HGRN" Yeah, it would be best to stay away from this one..."OFF,textSpeed);
-                    getchar();
-                    clearScreen();
-                    break;
-                } else {
-                    typeText(YELLOW ITALIC_ON"This seems to be an appropriate age to hire. So, why not right?"OFF,textSpeed);
-                    
-                    Hiring_Process(age, name, root);
-                }
-
                 
                 break;
             }
 
             case 3: {
+                if(guideIndicator == 1){guide(3);}
                 int ID;
+                printf("Fire Employee\n\n");
                 typeText(HRED ITALIC_ON"Uh oh, looks like someones going to have a bad day.\n\n\n"OFF""YELLOW"(Enter [-1] to cancel)\n",textSpeed);
                 printf("Enter ID to fire: "OFF);
                 scanf("%d", &ID); while (getchar() != '\n'); 
@@ -662,25 +966,31 @@ int main() {
                     break;
                 }
                 root = removeNode(root, ID);
+                
                 clearScreen();
                 break;
             }
 
             case 4: {
+                if(guideIndicator == 1){guide(4);}
+                printf("Save File\n\n");
                 FILE* file = fopen("EmployeeData.txt", "w");
                 if (file != NULL) {
+                    updatePositions(root, thresholds, sizeof(thresholds) / sizeof(thresholds[0]));
                     writeFile(file, root);
                     setAsset();
+                    
                     typeText(GREEN"Saving employee data...\n",textSpeed);
-                    Sleep(1000);
-                    typeText("Saving assets data...\n",textSpeed);
-                    Sleep(1000);
+                    Sleep(500);
+                    typeText("Saving assets data...\n"OFF,textSpeed);
+                    
+                    Sleep(500);
                     clearScreen();
-                    typeText("Employee data has been saved to EmployeeData.txt successfully\nAssets data has been saved to Asset.txt successfully!\n\n\n"OFF,textSpeed);
-                    typeText("[ENTER] to continue...",textSpeed);
+                    printf("Save File\n\n");
+                    typeText(GREEN"Employee data has been saved to EmployeeData.txt successfully\nAssets data has been saved to Asset.txt successfully!\n\n\n"OFF,textSpeed);
+                    typeText("[ENTER]",textSpeed);
                     getchar();
-                    typeText(YELLOW ITALIC_ON"Well now, that sounds reassuring doesn't it? Let's just hope that no one tries to hack into our system"OFF"\n\n"YELLOW"[ENTER] to continue..."OFF,textSpeed);
-                    textSpeed = 15;
+                    typeText(YELLOW ITALIC_ON"Well, that sounds reassuring doesn't it? Let's just hope that no one tries to hack into our system"OFF"\n\n"YELLOW"[ENTER] to continue..."OFF,textSpeed);
                     fclose(file);
                     getchar();
                     clearScreen();
@@ -693,6 +1003,8 @@ int main() {
             }
 
             case 5:
+                if(guideIndicator == 1){guide(5);}
+                printf("See Pocketed Money\n\n");
                 typeText(YELLOW"Its always nice to see progress in our work\n\n",textSpeed);
                 printf("Total Money Pocketed:"OFF""GREEN" $%d"OFF"\t\t"YELLOW"Total Employees Hired:"OFF" "RED"%d\n"OFF, CEO_Comm, Employee_Count);
                 typeText("\n\n\n[ENTER] to return...",textSpeed);
@@ -701,93 +1013,49 @@ int main() {
                 break;
 
             case 6:
+                if(guideIndicator == 1){guide(6);}
                 while (1) {
+                    printf("Demolish Company\n\n");
                     typeText(YELLOW"You are about to destroy everything in this company. \nAre you sure you want to go through with this?\n\n[1]"OFF""HRED" Lets burn it down!"OFF""YELLOW"\n[2]"OFF""HGRN" I think I'm having second thoughts.\n\n"OFF YELLOW"Decision: "OFF,textSpeed);
                     int choice; scanf("%d", &choice); getchar(); clearScreen();
+
                     if (choice == 1) {
 
                         wipeData_fromFile(root);
                         typeText(HRED"*the whole company is now covered in blazing flames*"OFF""YELLOW ITALIC_ON"\n\nWell boss, it was fun working with you.",textSpeed);
-                        Sleep(1000);
-                        printf(". ");
-                        Sleep(1000);
-                        printf(". ");
-                        Sleep(1000);
-                        printf(". ");
-                        Sleep(1000);
+                        for(int i = 0; i<2; i++){
+                            printf(". ");
+                            Sleep(500);
+                        }
                         clearScreen();
+                        printf(YELLOW"[ENTER] "OFF HGRN"..."OFF);getchar();
 
                         typeText("Goodbye boss",textSpeed);
-                        printf(". ");
+                        for(int i = 0; i<2; i++){
+                            printf(". ");
+                            Sleep(500);
+                        }
+                        
                         Sleep(1000);
-                        printf(". ");
-                        Sleep(1000);
-                        printf(". \n\n\n"OFF);
-                        Sleep(1500);
-                        typeText(RED"Simulation Terminated."OFF,textSpeed);
+                        typeText(RED"\n\n\nSimulation Terminated."OFF,textSpeed);
                         exit(0);
 
                         break;
                     } else if (choice == 2) {
-                        typeText(YELLOW ITALIC_ON"If you're having second thoughts then maybe we should NOT think about destroying everything we've built, okay?\nMaybe we'll do it some other day, when you're more decisive in your life.\n\n\n"OFF YELLOW"[ENTER] "OFF HGRN"...",textSpeed);
-                        getchar();
-                        clearScreen();
+                        typeText(YELLOW ITALIC_ON"If you're having second thoughts then maybe we should NOT think about destroying everything we've built, okay?\nMaybe we'll do it some other day, when you're more decisive in your life.\n\n\n"OFF YELLOW"[ENTER] "OFF HGRN"..."OFF,textSpeed);
+                        endSentences();
                         break;
                     }
                 }
                 break;
 
             case 7:
-
-                while(1){
-                    if(textSpeed != 0){
-                    typeText(YELLOW ITALIC_ON"Do you want to remove the text animation?\n\n\n"OFF YELLOW"[1]"OFF HRED" Yeah, its kind of annoying."OFF YELLOW"\n[2]"OFF HGRN" No, I changed my mind.\n\n"OFF YELLOW"Decision: ",textSpeed);
-                    int choice; scanf("%d", &choice); getchar();
-                    if (choice == 1) {
-                        
-                        typeText(YELLOW ITALIC_ON"It took quite a lot of effort to make it look good you know. \nBut oh well, \"The user is always right\" I guess.\n\n\n"OFF YELLOW"[ENTER]"OFF HGRN" ..."OFF,textSpeed);
-                        getchar();
-                        textSpeed = 0;
-                        clearScreen();
-                        break;
-                    }
-                    else if (choice == 2) {
-                        typeText(YELLOW ITALIC_ON"You've got good taste boss! You truly have an eye for aesthetics!\n\n\n"OFF YELLOW"[ENTER]"OFF HGRN" ..."OFF,textSpeed);
-                        getchar();
-                        clearScreen();
-                        break;
-                    } else {
-                        clearScreen();
-                        typeText(YELLOW ITALIC_ON"There literally only 2 choices."OFF HRED" TWO CHOICES!"OFF YELLOW ITALIC_ON" How can you mess that up!\n\n\n"OFF YELLOW"[ENTER]"OFF HGRN" ..."OFF,textSpeed);
-                        getchar();
-                        clearScreen;
-                    }
-                } else {
-                    typeText(YELLOW ITALIC_ON"Changed your mind? Kind of an indecisive person aren't you.\n\n\n"OFF YELLOW"[1]"HGRN" Yeah, so what?!\n"OFF YELLOW"[2]"OFF RED" Well, maybe you're right!"OFF YELLOW"\n\n\nDecision: "OFF,textSpeed);
-                    int choice; scanf("%d", &choice); getchar();
-                    if (choice == 1) {
-                        typeText(YELLOW ITALIC_ON"Good for you, I guess...\n\n\n"OFF YELLOW"[ENTER]"HGRN" ..."OFF,textSpeed);
-                        textSpeed = 15;
-                        getchar();
-                        clearScreen();
-                        break;
-                    }
-                    else if (choice == 2){
-                        typeText(YELLOW ITALIC_ON"Okay then, I suppose...\n\n\n"OFF YELLOW"[ENTER]"HGRN" ..."OFF,textSpeed);
-                        getchar();
-                        clearScreen();
-                        break;
-                    } else {
-                        clearScreen();
-                        typeText(YELLOW ITALIC_ON"There literally only 2 choices."OFF HRED" TWO CHOICES!"OFF YELLOW ITALIC_ON" How can you mess that up!\n\n\n"OFF YELLOW"[ENTER]"OFF HGRN" ..."OFF,textSpeed);
-                        getchar();
-                        clearScreen;
-                    }
-                    }
-                }
-                
+                if(guideIndicator == 1){guide(7);}
+                setting();
                 break;
             case 8:
+                if(guideIndicator == 1){guide(8);}
+                printf("Clock Out\n\n");
                 typeText(YELLOW ITALIC_ON"Before clocking out, are you sure you "OFF HGRN"saved your work"OFF YELLOW ITALIC_ON" today?\nNow I'm not accusing you of being incompetent or whatever but people tend to forget this kind of thing.\nSo yeah, just check it.\nIt doesn't hurt to check you know\n\n"OFF,textSpeed);
                 Sleep(1000);
                 typeText(YELLOW"[1]"OFF""RED" Of course I saved my work, I'm not an idiot."OFF"\n"YELLOW"[2]"OFF" "GREEN"Yeah, I should probably check just to be sure.\n\n"OFF,textSpeed);
@@ -806,8 +1074,7 @@ int main() {
                 clearScreen();
                 typeText(YELLOW ITALIC_ON"There are choices provided for you, you know.\n\nI know, that you know, what you're supposed to do.\n\n\n"OFF,textSpeed);
                 typeText(GREEN"[ENTER] ..."OFF,textSpeed);
-                getchar();
-                clearScreen();
+                endSentences();
                 break;
         }
     }
